@@ -16,6 +16,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::auth::ValidatedKey;
+use crate::sanitize::{filter_pii, sanitize_request};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -126,8 +127,12 @@ struct Usage {
 pub async fn completions(
     State(state): State<Arc<AppState>>,
     Extension(key): Extension<ValidatedKey>,
-    Json(req): Json<ChatCompletionRequest>,
+    Json(mut req): Json<ChatCompletionRequest>,
 ) -> Response {
+    if let Err(e) = sanitize_request(&mut req) {
+        return error_json(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string());
+    }
+
     // Build the ordered candidate list: round-robin across single-node peers,
     // falling back to multi-node if no single node can fit the model.
     let candidates = {
@@ -344,7 +349,8 @@ async fn stream_response(
                 }
 
                 if let Some(msg) = ollama_chunk.message {
-                    if !msg.content.is_empty() {
+                    let filtered = filter_pii(&msg.content);
+                    if !filtered.is_empty() {
                         let content_chunk = ChatCompletionChunk {
                             id: id_clone.clone(),
                             object: "chat.completion.chunk",
@@ -354,7 +360,7 @@ async fn stream_response(
                                 index: 0,
                                 delta: Delta {
                                     role: None,
-                                    content: Some(msg.content),
+                                    content: Some(filtered),
                                 },
                                 finish_reason: None,
                             }],
@@ -440,11 +446,12 @@ fn build_openai_response(
     model: &str,
     request_id: &str,
 ) -> ChatCompletionResponse {
-    let content = ollama_body
-        .pointer("/message/content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let content = filter_pii(
+        ollama_body
+            .pointer("/message/content")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    );
 
     let prompt_tokens = ollama_body
         .pointer("/prompt_eval_count")

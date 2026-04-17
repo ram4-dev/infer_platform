@@ -8,6 +8,7 @@ mod license;
 mod models;
 mod nodes;
 mod routes;
+mod sanitize;
 mod shard_coordinator;
 mod stale_nodes;
 mod state;
