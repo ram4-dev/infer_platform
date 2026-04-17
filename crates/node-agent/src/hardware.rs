@@ -72,7 +72,7 @@ fn probe_nvidia_proc() -> Option<(String, u64)> {
             }
             if let Some(rest) = line.strip_prefix("Video Memory:") {
                 // "N MiB"
-                if let Some(n) = rest.trim().split_whitespace().next() {
+                if let Some(n) = rest.split_whitespace().next() {
                     vram_mb = n.parse::<u64>().ok();
                 }
             }
