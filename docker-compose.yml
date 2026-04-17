@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: infer
+      POSTGRES_USER: infer
+      POSTGRES_PASSWORD: infer_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infer -d infer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://infer:infer_dev_password@postgres:5432/infer
+      REDIS_URL: redis://redis:6379
+      INFER_INTERNAL_KEY: internal_dev_secret
+      INFER_API_KEYS: ""
+      OLLAMA_URL: http://node-agent:11434
+      RUST_LOG: api_gateway=info,tower_http=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  node-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: node-agent
+    ports:
+      - "8181:8181"
+    environment:
+      COORDINATOR_URL: http://api-gateway:8080
+      INFER_INTERNAL_KEY: internal_dev_secret
+      NODE_NAME: local-node-1
+      NODE_PORT: "11434"
+      AGENT_PORT: "8181"
+      RUST_LOG: node_agent=info,tower_http=info
+    depends_on:
+      - api-gateway
+
+volumes:
+  postgres_data:
+  redis_data:

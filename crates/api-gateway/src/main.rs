@@ -1,8 +1,11 @@
 mod auth;
+mod cache;
+mod db;
 mod models;
 mod nodes;
 mod routes;
 mod shard_coordinator;
+mod stale_nodes;
 mod state;
 
 use std::sync::Arc;
@@ -10,7 +13,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::{
     middleware,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -24,18 +27,20 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            "api_gateway=debug,tower_http=debug".into()
-        }))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "api_gateway=debug,tower_http=debug".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let state = Arc::new(AppState::from_env()?);
+    let state = Arc::new(AppState::from_env().await?);
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".into());
     let addr = format!("0.0.0.0:{port}");
 
-    let app = build_router(state);
+    stale_nodes::spawn(state.clone());
 
+    let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     info!("infer API gateway listening on {addr}");
 
@@ -55,6 +60,9 @@ fn build_router(state: Arc<AppState>) -> Router {
     let internal = Router::new()
         .route("/v1/internal/nodes", post(routes::nodes::register))
         .route("/v1/internal/nodes", get(routes::nodes::list))
+        .route("/v1/internal/keys", post(routes::keys::create))
+        .route("/v1/internal/keys", get(routes::keys::list))
+        .route("/v1/internal/keys/:id", delete(routes::keys::revoke))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_internal_key,

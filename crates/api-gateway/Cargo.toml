@@ -24,3 +24,8 @@ dotenvy = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 shard-planner = { path = "../shard-planner" }
+sqlx = { workspace = true }
+redis = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
