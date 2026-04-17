@@ -4,6 +4,7 @@ mod billing_cron;
 mod cache;
 mod db;
 mod health_monitor;
+mod license;
 mod models;
 mod nodes;
 mod routes;
@@ -72,6 +73,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/internal/keys", get(routes::keys::list))
         .route("/v1/internal/keys/:id", delete(routes::keys::revoke))
         .route("/v1/internal/usage", get(routes::usage::summary))
+        .route("/v1/internal/licenses", get(routes::licenses::list))
         // Provider Connect onboarding — requires internal key.
         .route("/v1/internal/billing/connect", post(routes::billing::connect))
         .layer(middleware::from_fn_with_state(

@@ -31,6 +31,13 @@ pub enum NodeStatus {
     Degraded,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ModelRegistration {
+    pub name: String,
+    /// License identifier, e.g. "apache-2.0", "llama-3", "mit".
+    pub license: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RegisterNodeRequest {
     pub name: String,
@@ -40,4 +47,7 @@ pub struct RegisterNodeRequest {
     pub agent_port: u16,
     pub gpu_name: String,
     pub vram_mb: u64,
+    /// Models this node serves. License for each is validated at registration.
+    #[serde(default)]
+    pub models: Vec<ModelRegistration>,
 }

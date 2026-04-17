@@ -5,14 +5,35 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::{
-    nodes::{NodeInfo, NodeStatus, RegisterNodeRequest},
+    license,
+    nodes::{ModelRegistration, NodeInfo, NodeStatus, RegisterNodeRequest},
     state::AppState,
 };
+
+type RegisterResult = Result<(StatusCode, Json<NodeInfo>), (StatusCode, Json<serde_json::Value>)>;
 
 pub async fn register(
     State(state): State<Arc<AppState>>,
     Json(req): Json<RegisterNodeRequest>,
-) -> (StatusCode, Json<NodeInfo>) {
+) -> RegisterResult {
+    // --- License compliance check ---
+    let pairs: Vec<(String, String)> = req
+        .models
+        .iter()
+        .map(|m| (m.name.clone(), m.license.clone()))
+        .collect();
+
+    let violations = license::find_violations(&pairs);
+    if !violations.is_empty() {
+        let body = serde_json::json!({
+            "error": "license_not_approved",
+            "message": "One or more models use licenses not approved for this platform.",
+            "violations": violations,
+            "approved_licenses": license::APPROVED_LICENSES,
+        });
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(body)));
+    }
+
     let node = NodeInfo {
         id: Uuid::new_v4().to_string(),
         name: req.name.clone(),
@@ -29,12 +50,18 @@ pub async fn register(
     if let Some(ref pool) = state.db {
         match upsert_node(pool, &node).await {
             Ok(persisted) => {
+                if !req.models.is_empty() {
+                    if let Err(e) = upsert_node_models(pool, &persisted.id, &req.models).await {
+                        tracing::warn!("Failed to persist node_models for {}: {e}", persisted.id);
+                    }
+                }
                 tracing::info!(
-                    "Node upserted: {} ({}MB VRAM)",
+                    "Node upserted: {} ({}MB VRAM, {} model(s))",
                     persisted.name,
-                    persisted.vram_mb
+                    persisted.vram_mb,
+                    req.models.len(),
                 );
-                return (StatusCode::CREATED, Json(persisted));
+                return Ok((StatusCode::CREATED, Json(persisted)));
             }
             Err(e) => {
                 tracing::error!("Failed to upsert node to DB: {e}");
@@ -50,11 +77,12 @@ pub async fn register(
         nodes.push(node.clone());
     }
     tracing::info!(
-        "Node registered (memory): {} ({}MB VRAM)",
+        "Node registered (memory): {} ({}MB VRAM, {} model(s))",
         node.name,
-        node.vram_mb
+        node.vram_mb,
+        req.models.len(),
     );
-    (StatusCode::CREATED, Json(node))
+    Ok((StatusCode::CREATED, Json(node)))
 }
 
 pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -83,7 +111,6 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value>
 }
 
 async fn upsert_node(pool: &sqlx::PgPool, node: &NodeInfo) -> anyhow::Result<NodeInfo> {
-    // ON CONFLICT on name: update host/port/status/last_seen, preserve original id and registered_at.
     let row = sqlx::query_as::<_, DbNode>(
         "INSERT INTO nodes (id, name, host, port, agent_port, gpu_name, vram_mb, status, registered_at, last_seen)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -111,6 +138,28 @@ async fn upsert_node(pool: &sqlx::PgPool, node: &NodeInfo) -> anyhow::Result<Nod
     .await?;
 
     Ok(row.into())
+}
+
+async fn upsert_node_models(
+    pool: &sqlx::PgPool,
+    node_id: &str,
+    models: &[ModelRegistration],
+) -> anyhow::Result<()> {
+    for m in models {
+        sqlx::query(
+            "INSERT INTO node_models (node_id, model_name, license)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (node_id, model_name) DO UPDATE SET
+                 license       = EXCLUDED.license,
+                 registered_at = NOW()",
+        )
+        .bind(node_id)
+        .bind(&m.name)
+        .bind(m.license.trim().to_lowercase())
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
 }
 
 async fn list_nodes_db(pool: &sqlx::PgPool) -> anyhow::Result<Vec<NodeInfo>> {
