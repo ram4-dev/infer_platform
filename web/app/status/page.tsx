@@ -106,6 +106,12 @@ export default function StatusPage() {
           >
             API Keys
           </Link>
+          <Link
+            href="/provider"
+            className="hover:text-foreground transition-colors text-xs"
+          >
+            Provider
+          </Link>
         </div>
       </nav>
 

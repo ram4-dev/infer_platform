@@ -5,4 +5,5 @@ pub mod keys;
 pub mod licenses;
 pub mod models;
 pub mod nodes;
+pub mod provider;
 pub mod usage;

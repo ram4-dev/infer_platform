@@ -74,6 +74,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/internal/keys/:id", delete(routes::keys::revoke))
         .route("/v1/internal/usage", get(routes::usage::summary))
         .route("/v1/internal/licenses", get(routes::licenses::list))
+        .route("/v1/internal/provider/stats", get(routes::provider::stats))
         // Provider Connect onboarding — requires internal key.
         .route("/v1/internal/billing/connect", post(routes::billing::connect))
         .layer(middleware::from_fn_with_state(
