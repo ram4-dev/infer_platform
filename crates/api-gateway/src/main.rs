@@ -63,6 +63,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/internal/keys", post(routes::keys::create))
         .route("/v1/internal/keys", get(routes::keys::list))
         .route("/v1/internal/keys/:id", delete(routes::keys::revoke))
+        .route("/v1/internal/usage", get(routes::usage::summary))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_internal_key,

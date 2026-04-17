@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{Extension, State},
     http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -15,6 +15,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::auth::ValidatedKey;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -59,6 +60,10 @@ struct OllamaOptions {
 struct OllamaChunk {
     message: Option<OllamaChunkMessage>,
     done: bool,
+    #[serde(default)]
+    prompt_eval_count: u32,
+    #[serde(default)]
+    eval_count: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,17 +125,18 @@ struct Usage {
 
 pub async fn completions(
     State(state): State<Arc<AppState>>,
+    Extension(key): Extension<ValidatedKey>,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Response {
-    // Resolve which node(s) should handle this request.
     let plan = {
         let nodes = state.nodes.read().await;
         state.coordinator.build_plan(&req.model, &nodes)
     };
 
+    let db = state.db.clone();
+    let key_id = key.key_id.clone();
+
     if req.stream {
-        // Streaming: always proxy directly to the controller's Ollama.
-        // Multi-node pipeline streaming is a future enhancement.
         let ollama_base = plan
             .as_ref()
             .map(|p| p.controller().ollama_base_url())
@@ -146,16 +152,25 @@ pub async fn completions(
             }
         }
 
-        stream_response(ollama_base, req).await
+        stream_response(ollama_base, req, db, key_id).await
     } else {
-        // Non-streaming: use full pipeline execution for multi-node plans.
         let request_id = Uuid::new_v4().to_string();
 
         match plan {
             Some(ref p) if !p.is_single_node() => {
                 match state.coordinator.execute(&req, p, &request_id).await {
                     Ok(ollama_body) => {
-                        build_openai_response(ollama_body, &req.model, &request_id).into_response()
+                        let resp = build_openai_response(ollama_body, &req.model, &request_id);
+                        if let Some(pool) = db {
+                            record_usage(
+                                pool,
+                                key_id,
+                                req.model.clone(),
+                                resp.usage.prompt_tokens as i32,
+                                resp.usage.completion_tokens as i32,
+                            );
+                        }
+                        Json(resp).into_response()
                     }
                     Err(e) => {
                         warn!("pipeline execution failed: {e}");
@@ -168,7 +183,7 @@ pub async fn completions(
                     .as_ref()
                     .map(|p| p.controller().ollama_base_url())
                     .unwrap_or_else(|| state.ollama_url.clone());
-                non_stream_response(ollama_base, &request_id, req)
+                non_stream_response(ollama_base, &request_id, req, db, key_id)
                     .await
                     .into_response()
             }
@@ -176,9 +191,34 @@ pub async fn completions(
     }
 }
 
+// ── Usage recording ──────────────────────────────────────────────────────────
+
+fn record_usage(db: sqlx::PgPool, key_id: String, model: String, tokens_in: i32, tokens_out: i32) {
+    tokio::spawn(async move {
+        let result = sqlx::query(
+            "INSERT INTO usage_logs (key_id, model, tokens_in, tokens_out) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(&key_id)
+        .bind(&model)
+        .bind(tokens_in)
+        .bind(tokens_out)
+        .execute(&db)
+        .await;
+        if let Err(e) = result {
+            warn!(key_id, model, "failed to record usage: {e}");
+        }
+    });
+}
+
 // ── Streaming path ───────────────────────────────────────────────────────────
 
-async fn stream_response(ollama_base: String, req: ChatCompletionRequest) -> Response {
+async fn stream_response(
+    ollama_base: String,
+    req: ChatCompletionRequest,
+    db: Option<sqlx::PgPool>,
+    key_id: String,
+) -> Response {
     let completion_id = format!("chatcmpl-{}", Uuid::new_v4().simple());
     let created = chrono::Utc::now().timestamp();
     let model = req.model.clone();
@@ -265,6 +305,15 @@ async fn stream_response(ollama_base: String, req: ChatCompletionRequest) -> Res
                 };
 
                 if ollama_chunk.done {
+                    if let Some(pool) = db {
+                        record_usage(
+                            pool,
+                            key_id,
+                            model_clone.clone(),
+                            ollama_chunk.prompt_eval_count as i32,
+                            ollama_chunk.eval_count as i32,
+                        );
+                    }
                     let final_chunk = ChatCompletionChunk {
                         id: id_clone.clone(),
                         object: "chat.completion.chunk",
@@ -327,6 +376,8 @@ async fn non_stream_response(
     ollama_base: String,
     request_id: &str,
     req: ChatCompletionRequest,
+    db: Option<sqlx::PgPool>,
+    key_id: String,
 ) -> Result<Json<ChatCompletionResponse>, Response> {
     let url = format!("{ollama_base}/api/chat");
     let client = reqwest::Client::new();
@@ -362,7 +413,17 @@ async fn non_stream_response(
         error_json(StatusCode::BAD_GATEWAY, "invalid response from backend")
     })?;
 
-    Ok(build_openai_response(body, &req.model, request_id))
+    let completion = build_openai_response(body, &req.model, request_id);
+    if let Some(pool) = db {
+        record_usage(
+            pool,
+            key_id,
+            req.model.clone(),
+            completion.usage.prompt_tokens as i32,
+            completion.usage.completion_tokens as i32,
+        );
+    }
+    Ok(Json(completion))
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -371,7 +432,7 @@ fn build_openai_response(
     ollama_body: serde_json::Value,
     model: &str,
     request_id: &str,
-) -> Json<ChatCompletionResponse> {
+) -> ChatCompletionResponse {
     let content = ollama_body
         .pointer("/message/content")
         .and_then(|v| v.as_str())
@@ -387,7 +448,7 @@ fn build_openai_response(
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
 
-    Json(ChatCompletionResponse {
+    ChatCompletionResponse {
         id: format!("chatcmpl-{request_id}"),
         object: "chat.completion",
         created: chrono::Utc::now().timestamp(),
@@ -405,7 +466,7 @@ fn build_openai_response(
             completion_tokens,
             total_tokens: prompt_tokens + completion_tokens,
         },
-    })
+    }
 }
 
 fn build_options(req: &ChatCompletionRequest) -> Option<OllamaOptions> {
