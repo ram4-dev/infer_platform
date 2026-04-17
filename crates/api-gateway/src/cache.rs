@@ -24,6 +24,4 @@ impl RateLimiter {
 
         Ok(count <= rpm)
     }
-
-
 }
