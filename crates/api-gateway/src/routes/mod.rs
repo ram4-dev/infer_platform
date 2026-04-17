@@ -1,3 +1,4 @@
+pub mod billing;
 pub mod chat;
 pub mod health;
 pub mod keys;

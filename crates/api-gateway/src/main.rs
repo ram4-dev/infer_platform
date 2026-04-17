@@ -1,4 +1,6 @@
 mod auth;
+mod billing;
+mod billing_cron;
 mod cache;
 mod db;
 mod health_monitor;
@@ -41,6 +43,7 @@ async fn main() -> Result<()> {
 
     stale_nodes::spawn(state.clone());
     health_monitor::spawn(state.clone());
+    billing_cron::spawn(state.clone());
 
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -55,6 +58,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/chat/completions", post(routes::chat::completions))
         .route("/v1/models", get(routes::models::list))
         .route("/v1/models/:id", get(routes::models::get))
+        // Consumer billing setup — requires a valid API key.
+        .route("/v1/billing/setup", post(routes::billing::setup))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_api_key,
@@ -67,6 +72,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/internal/keys", get(routes::keys::list))
         .route("/v1/internal/keys/:id", delete(routes::keys::revoke))
         .route("/v1/internal/usage", get(routes::usage::summary))
+        // Provider Connect onboarding — requires internal key.
+        .route("/v1/internal/billing/connect", post(routes::billing::connect))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_internal_key,
@@ -77,6 +84,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         .merge(internal)
         .route("/ping", get(|| async { "pong" }))
         .route("/health", get(routes::health::check))
+        // Stripe webhooks — no auth, signature validated inside handler.
+        .route("/v1/webhooks/stripe", post(routes::billing::stripe_webhook))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
