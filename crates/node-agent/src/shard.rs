@@ -61,13 +61,19 @@ pub async fn forward(
     State(state): State<AgentState>,
     Json(req): Json<ShardForwardRequest>,
 ) -> Result<Json<ShardForwardResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let my_assignment = req.plan.assignments.iter().find(|a| {
-        a.host == local_host(&state)
-            || a.agent_port == state.agent_port
-    });
+    let my_assignment = req
+        .plan
+        .assignments
+        .iter()
+        .find(|a| a.host == local_host(&state) || a.agent_port == state.agent_port);
 
     let shard_index = my_assignment
-        .and_then(|a| req.plan.assignments.iter().position(|x| x.node_id == a.node_id))
+        .and_then(|a| {
+            req.plan
+                .assignments
+                .iter()
+                .position(|x| x.node_id == a.node_id)
+        })
         .unwrap_or(0);
 
     info!(
@@ -91,7 +97,10 @@ pub async fn forward(
     if shard_index + 1 < req.plan.assignments.len() {
         let (next_node_id, next_url) = {
             let next = &req.plan.assignments[shard_index + 1];
-            (next.node_id.clone(), format!("{}/infer/shard", next.agent_base_url()))
+            (
+                next.node_id.clone(),
+                format!("{}/infer/shard", next.agent_base_url()),
+            )
         };
 
         // Build a new request carrying the accumulated output as context.
@@ -175,10 +184,7 @@ async fn run_ollama_inference(
     state: &AgentState,
     req: &ShardForwardRequest,
 ) -> anyhow::Result<serde_json::Value> {
-    let url = format!(
-        "http://localhost:{}/api/chat",
-        state.node_port
-    );
+    let url = format!("http://localhost:{}/api/chat", state.node_port);
 
     let mut body = json!({
         "model": req.model,
@@ -204,11 +210,7 @@ async fn run_ollama_inference(
         .timeout(Duration::from_secs(120))
         .build()?;
 
-    let resp = client
-        .post(&url)
-        .json(&body)
-        .send()
-        .await?;
+    let resp = client.post(&url).json(&body).send().await?;
 
     if !resp.status().is_success() {
         anyhow::bail!("Ollama returned {}", resp.status());

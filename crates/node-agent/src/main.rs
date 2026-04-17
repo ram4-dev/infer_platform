@@ -5,11 +5,7 @@ mod shard;
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::{
-    extract::State,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, routing::get, Json, Router};
 use chrono::Utc;
 use serde::Serialize;
 use tokio::sync::RwLock;
@@ -60,8 +56,8 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "8181".into())
         .parse()
         .unwrap_or(8181);
-    let coordinator_url = std::env::var("COORDINATOR_URL")
-        .unwrap_or_else(|_| "http://localhost:8080".into());
+    let coordinator_url =
+        std::env::var("COORDINATOR_URL").unwrap_or_else(|_| "http://localhost:8080".into());
 
     let hardware = Arc::new(hardware::collect());
     info!(
@@ -126,8 +122,6 @@ async fn info_handler(State(state): State<AgentState>) -> Json<serde_json::Value
 
 fn hostname() -> String {
     std::env::var("HOSTNAME")
-        .or_else(|_| {
-            std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string())
-        })
+        .or_else(|_| std::fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()))
         .unwrap_or_else(|_| "unknown-node".to_string())
 }

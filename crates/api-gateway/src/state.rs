@@ -35,8 +35,8 @@ impl AppState {
         let internal_key = std::env::var("INFER_INTERNAL_KEY")
             .unwrap_or_else(|_| "internal_dev_secret".to_string());
 
-        let ollama_url = std::env::var("OLLAMA_URL")
-            .unwrap_or_else(|_| "http://localhost:11434".to_string());
+        let ollama_url =
+            std::env::var("OLLAMA_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
 
         let db = if let Ok(url) = std::env::var("DATABASE_URL") {
             let pool = crate::db::init_pool(&url).await?;

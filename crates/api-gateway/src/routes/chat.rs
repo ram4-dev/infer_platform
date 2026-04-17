@@ -155,8 +155,7 @@ pub async fn completions(
             Some(ref p) if !p.is_single_node() => {
                 match state.coordinator.execute(&req, p, &request_id).await {
                     Ok(ollama_body) => {
-                        build_openai_response(ollama_body, &req.model, &request_id)
-                            .into_response()
+                        build_openai_response(ollama_body, &req.model, &request_id).into_response()
                     }
                     Err(e) => {
                         warn!("pipeline execution failed: {e}");
@@ -199,7 +198,10 @@ async fn stream_response(ollama_base: String, req: ChatCompletionRequest) -> Res
         Ok(r) => {
             let status = r.status();
             warn!("Ollama returned {status} at {url}");
-            return error_json(StatusCode::BAD_GATEWAY, &format!("backend returned {status}"));
+            return error_json(
+                StatusCode::BAD_GATEWAY,
+                &format!("backend returned {status}"),
+            );
         }
         Err(e) => {
             warn!("Failed to reach Ollama at {url}: {e}");
@@ -219,14 +221,17 @@ async fn stream_response(ollama_base: String, req: ChatCompletionRequest) -> Res
             model: model_clone.clone(),
             choices: vec![ChunkChoice {
                 index: 0,
-                delta: Delta { role: Some("assistant"), content: None },
+                delta: Delta {
+                    role: Some("assistant"),
+                    content: None,
+                },
                 finish_reason: None,
             }],
         };
         let _ = tx
-            .send(Ok(Event::default().data(
-                serde_json::to_string(&role_chunk).unwrap_or_default(),
-            )))
+            .send(Ok(
+                Event::default().data(serde_json::to_string(&role_chunk).unwrap_or_default())
+            ))
             .await;
 
         let mut byte_stream = ollama_resp.bytes_stream();
@@ -267,15 +272,17 @@ async fn stream_response(ollama_base: String, req: ChatCompletionRequest) -> Res
                         model: model_clone.clone(),
                         choices: vec![ChunkChoice {
                             index: 0,
-                            delta: Delta { role: None, content: None },
+                            delta: Delta {
+                                role: None,
+                                content: None,
+                            },
                             finish_reason: Some("stop"),
                         }],
                     };
-                    let _ = tx
-                        .send(Ok(Event::default().data(
-                            serde_json::to_string(&final_chunk).unwrap_or_default(),
-                        )))
-                        .await;
+                    let _ =
+                        tx.send(Ok(Event::default()
+                            .data(serde_json::to_string(&final_chunk).unwrap_or_default())))
+                            .await;
                     let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
                     return;
                 }
@@ -289,7 +296,10 @@ async fn stream_response(ollama_base: String, req: ChatCompletionRequest) -> Res
                             model: model_clone.clone(),
                             choices: vec![ChunkChoice {
                                 index: 0,
-                                delta: Delta { role: None, content: Some(msg.content) },
+                                delta: Delta {
+                                    role: None,
+                                    content: Some(msg.content),
+                                },
                                 finish_reason: None,
                             }],
                         };
@@ -384,7 +394,10 @@ fn build_openai_response(
         model: model.to_string(),
         choices: vec![CompletionChoice {
             index: 0,
-            message: ChatMessage { role: "assistant".to_string(), content },
+            message: ChatMessage {
+                role: "assistant".to_string(),
+                content,
+            },
             finish_reason: "stop",
         }],
         usage: Usage {

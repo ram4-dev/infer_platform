@@ -137,17 +137,16 @@ pub async fn revoke(
 ) -> ApiResult<StatusCode> {
     let pool = require_db(&state)?;
 
-    let result = sqlx::query(
-        "UPDATE api_keys SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL",
-    )
-    .bind(Utc::now())
-    .bind(&key_id)
-    .execute(pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("failed to revoke API key: {e}");
-        internal_error("failed to revoke key")
-    })?;
+    let result =
+        sqlx::query("UPDATE api_keys SET revoked_at = $1 WHERE id = $2 AND revoked_at IS NULL")
+            .bind(Utc::now())
+            .bind(&key_id)
+            .execute(pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("failed to revoke API key: {e}");
+                internal_error("failed to revoke key")
+            })?;
 
     if result.rows_affected() == 0 {
         return Err((

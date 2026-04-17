@@ -31,10 +31,7 @@ pub fn collect() -> HardwareInfo {
 
 fn detect_gpu() -> (String, u64) {
     // Honour explicit env overrides (useful for nodes without nvml access)
-    if let (Ok(name), Ok(vram)) = (
-        std::env::var("GPU_NAME"),
-        std::env::var("GPU_VRAM_MB"),
-    ) {
+    if let (Ok(name), Ok(vram)) = (std::env::var("GPU_NAME"), std::env::var("GPU_VRAM_MB")) {
         if let Ok(vram_mb) = vram.parse::<u64>() {
             return (name, vram_mb);
         }

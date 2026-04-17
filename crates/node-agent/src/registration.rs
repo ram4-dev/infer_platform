@@ -7,8 +7,8 @@ use crate::AgentState;
 
 pub async fn register_loop(state: AgentState) {
     let url = format!("{}/v1/internal/nodes", state.coordinator_url);
-    let internal_key = std::env::var("INFER_INTERNAL_KEY")
-        .unwrap_or_else(|_| "internal_dev_secret".to_string());
+    let internal_key =
+        std::env::var("INFER_INTERNAL_KEY").unwrap_or_else(|_| "internal_dev_secret".to_string());
 
     let payload = json!({
         "name": state.node_name,

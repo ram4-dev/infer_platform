@@ -91,10 +91,7 @@ pub async fn require_api_key(
     next.run(req).await
 }
 
-async fn validate_from_db(
-    pool: &sqlx::PgPool,
-    key: &str,
-) -> anyhow::Result<Option<ValidatedKey>> {
+async fn validate_from_db(pool: &sqlx::PgPool, key: &str) -> anyhow::Result<Option<ValidatedKey>> {
     #[derive(sqlx::FromRow)]
     struct Row {
         id: String,

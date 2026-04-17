@@ -29,7 +29,11 @@ pub async fn register(
     if let Some(ref pool) = state.db {
         match upsert_node(pool, &node).await {
             Ok(persisted) => {
-                tracing::info!("Node upserted: {} ({}MB VRAM)", persisted.name, persisted.vram_mb);
+                tracing::info!(
+                    "Node upserted: {} ({}MB VRAM)",
+                    persisted.name,
+                    persisted.vram_mb
+                );
                 return (StatusCode::CREATED, Json(persisted));
             }
             Err(e) => {
@@ -45,7 +49,11 @@ pub async fn register(
     } else {
         nodes.push(node.clone());
     }
-    tracing::info!("Node registered (memory): {} ({}MB VRAM)", node.name, node.vram_mb);
+    tracing::info!(
+        "Node registered (memory): {} ({}MB VRAM)",
+        node.name,
+        node.vram_mb
+    );
     (StatusCode::CREATED, Json(node))
 }
 

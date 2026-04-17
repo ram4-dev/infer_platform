@@ -67,16 +67,12 @@ impl ShardCoordinator {
             return None;
         }
 
-        let spec = ModelRegistry::get(model)
-            .unwrap_or_else(|| ModelRegistry::estimate(model, 4096));
+        let spec =
+            ModelRegistry::get(model).unwrap_or_else(|| ModelRegistry::estimate(model, 4096));
 
         match plan_shards(&spec, &capacities) {
             Ok(plan) => {
-                info!(
-                    model,
-                    nodes = plan.assignments.len(),
-                    "shard plan created"
-                );
+                info!(model, nodes = plan.assignments.len(), "shard plan created");
                 Some(plan)
             }
             Err(e) => {
@@ -174,7 +170,6 @@ impl ShardCoordinator {
             .await
             .context("failed to parse shard response from controller")
     }
-
 }
 
 fn build_ollama_request(req: &ChatCompletionRequest) -> serde_json::Value {

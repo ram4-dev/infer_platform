@@ -25,21 +25,5 @@ impl RateLimiter {
         Ok(count <= rpm)
     }
 
-    /// Cache a serialized value with TTL (seconds).
-    pub async fn set_cached(&mut self, key: &str, value: &str, ttl_secs: u64) -> Result<()> {
-        let _: () = self.conn.set_ex(key, value, ttl_secs).await?;
-        Ok(())
-    }
 
-    /// Retrieve a cached value.
-    pub async fn get_cached(&mut self, key: &str) -> Result<Option<String>> {
-        let val: Option<String> = self.conn.get(key).await?;
-        Ok(val)
-    }
-
-    /// Invalidate a cache key.
-    pub async fn invalidate(&mut self, key: &str) -> Result<()> {
-        let _: () = self.conn.del(key).await?;
-        Ok(())
-    }
 }

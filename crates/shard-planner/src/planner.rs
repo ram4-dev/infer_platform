@@ -56,7 +56,9 @@ impl ShardPlan {
 pub enum PlanError {
     #[error("no online nodes available")]
     NoNodes,
-    #[error("insufficient total VRAM: need {need_mb} MB, have {have_mb} MB across {node_count} node(s)")]
+    #[error(
+        "insufficient total VRAM: need {need_mb} MB, have {have_mb} MB across {node_count} node(s)"
+    )]
     InsufficientVram {
         need_mb: u64,
         have_mb: u64,
@@ -91,7 +93,7 @@ pub fn plan_shards(model: &ModelSpec, nodes: &[NodeCapacity]) -> Result<ShardPla
 
     // Sort largest VRAM first so the controller has the most headroom.
     let mut sorted: Vec<&NodeCapacity> = nodes.iter().collect();
-    sorted.sort_by(|a, b| b.available_vram_mb.cmp(&a.available_vram_mb));
+    sorted.sort_by_key(|b| std::cmp::Reverse(b.available_vram_mb));
 
     let mut assignments: Vec<ShardAssignment> = Vec::new();
     let mut layer_cursor = 0u32;
@@ -193,7 +195,10 @@ mod tests {
         let covered: u32 = plan.assignments.iter().map(|a| a.layer_count()).sum();
         assert_eq!(covered, 80);
         // Assignments must be contiguous
-        assert_eq!(plan.assignments[1].layer_start, plan.assignments[0].layer_end);
+        assert_eq!(
+            plan.assignments[1].layer_start,
+            plan.assignments[0].layer_end
+        );
     }
 
     #[test]
@@ -222,11 +227,7 @@ mod tests {
     fn three_node_shard_contiguous() {
         // Use a model that requires more VRAM than any single node
         let model = llama70b(); // 40480 MB total
-        let nodes = [
-            node("a", 16384),
-            node("b", 16384),
-            node("c", 16384),
-        ];
+        let nodes = [node("a", 16384), node("b", 16384), node("c", 16384)];
         let plan = plan_shards(&model, &nodes).unwrap();
 
         // Verify contiguous layer coverage with no overlaps
