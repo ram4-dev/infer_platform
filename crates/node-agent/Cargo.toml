@@ -7,6 +7,10 @@ edition = "2021"
 name = "node-agent"
 path = "src/main.rs"
 
+[[bin]]
+name = "infer"
+path = "src/infer_cli.rs"
+
 [dependencies]
 axum = { workspace = true }
 tokio = { workspace = true }
@@ -22,3 +26,4 @@ chrono = { workspace = true }
 sysinfo = { workspace = true }
 shard-planner = { path = "../shard-planner" }
 uuid = { workspace = true }
+clap = { workspace = true }
