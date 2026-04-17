@@ -128,65 +128,71 @@ pub async fn completions(
     Extension(key): Extension<ValidatedKey>,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Response {
-    let plan = {
+    // Build the ordered candidate list: round-robin across single-node peers,
+    // falling back to multi-node if no single node can fit the model.
+    let candidates = {
         let nodes = state.nodes.read().await;
         let stats = state.node_stats.read().await;
-        state.coordinator.build_plan(&req.model, &nodes, &stats)
+        state.coordinator.build_candidates(&req.model, &nodes, &stats)
     };
 
     let db = state.db.clone();
     let key_id = key.key_id.clone();
 
     if req.stream {
-        let ollama_base = plan
-            .as_ref()
+        // Streaming cannot retry mid-flight; pick the first candidate (round-robin
+        // rotation was already applied inside build_candidates).
+        let ollama_base = candidates
+            .first()
             .map(|p| p.controller().ollama_base_url())
             .unwrap_or_else(|| state.ollama_url.clone());
 
-        if let Some(ref p) = plan {
-            if !p.is_single_node() {
-                info!(
-                    model = req.model,
-                    shards = p.assignments.len(),
-                    "streaming: falling back to controller node (pipeline streaming pending)"
-                );
-            }
+        if candidates.len() > 1 {
+            info!(
+                model = req.model,
+                candidates = candidates.len(),
+                "streaming: using round-robin node (failover not available for SSE)"
+            );
         }
 
         stream_response(ollama_base, req, db, key_id).await
     } else {
         let request_id = Uuid::new_v4().to_string();
 
-        match plan {
-            Some(ref p) if !p.is_single_node() => {
-                match state.coordinator.execute(&req, p, &request_id).await {
-                    Ok(ollama_body) => {
-                        let resp = build_openai_response(ollama_body, &req.model, &request_id);
-                        if let Some(pool) = db {
-                            record_usage(
-                                pool,
-                                key_id,
-                                req.model.clone(),
-                                resp.usage.prompt_tokens as i32,
-                                resp.usage.completion_tokens as i32,
-                            );
-                        }
-                        Json(resp).into_response()
-                    }
-                    Err(e) => {
-                        warn!("pipeline execution failed: {e}");
-                        error_json(StatusCode::BAD_GATEWAY, &e.to_string())
-                    }
+        if candidates.is_empty() {
+            // Dev-mode fallback: no nodes registered, proxy to local Ollama.
+            return non_stream_response(
+                state.ollama_url.clone(),
+                &request_id,
+                req,
+                db,
+                key_id,
+            )
+            .await
+            .into_response();
+        }
+
+        match state
+            .coordinator
+            .execute_with_failover(&req, &candidates, &request_id)
+            .await
+        {
+            Ok(ollama_body) => {
+                let resp = build_openai_response(ollama_body, &req.model, &request_id);
+                if let Some(pool) = db {
+                    record_usage(
+                        pool,
+                        key_id,
+                        req.model.clone(),
+                        resp.usage.prompt_tokens as i32,
+                        resp.usage.completion_tokens as i32,
+                    );
                 }
+                Json(resp).into_response()
             }
-            _ => {
-                let ollama_base = plan
-                    .as_ref()
-                    .map(|p| p.controller().ollama_base_url())
-                    .unwrap_or_else(|| state.ollama_url.clone());
-                non_stream_response(ollama_base, &request_id, req, db, key_id)
-                    .await
-                    .into_response()
+            Err(e) => {
+                warn!("all inference candidates failed: {e}");
+                error_json(StatusCode::BAD_GATEWAY, &e.to_string())
             }
         }
     }
