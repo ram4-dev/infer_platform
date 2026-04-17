@@ -93,9 +93,20 @@ export default function StatusPage() {
         >
           infer.ram4.dev
         </Link>
-        <Badge variant="outline" className="font-mono text-xs">
-          Network Status
-        </Badge>
+        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          <Link
+            href="/status"
+            className="text-foreground font-medium text-xs font-mono"
+          >
+            Status
+          </Link>
+          <Link
+            href="/keys"
+            className="hover:text-foreground transition-colors text-xs"
+          >
+            API Keys
+          </Link>
+        </div>
       </nav>
 
       <div className="flex-1 px-6 py-10 max-w-5xl mx-auto w-full space-y-10">

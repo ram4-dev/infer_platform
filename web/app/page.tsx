@@ -17,6 +17,12 @@ export default function Home() {
           >
             Status
           </Link>
+          <Link
+            href="/keys"
+            className="hover:text-foreground transition-colors"
+          >
+            API Keys
+          </Link>
           <a
             href="https://github.com/hyperspaceai/agi/blob/main/docs/PODS.md"
             target="_blank"
