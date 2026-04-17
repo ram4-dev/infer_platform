@@ -28,6 +28,7 @@ pub enum NodeStatus {
     Online,
     Offline,
     Busy,
+    Degraded,
 }
 
 #[derive(Debug, Deserialize)]

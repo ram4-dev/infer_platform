@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::cache::RateLimiter;
+use crate::cache::{LatencyCache, NodeStats, RateLimiter};
 use crate::nodes::NodeInfo;
 use crate::shard_coordinator::ShardCoordinator;
 
@@ -21,6 +21,10 @@ pub struct AppState {
     pub db: Option<sqlx::PgPool>,
     /// Redis-backed rate limiter — None when REDIS_URL is not set.
     pub rate_limiter: Option<Arc<Mutex<RateLimiter>>>,
+    /// Redis-backed latency stat cache — None when REDIS_URL is not set.
+    pub latency_cache: Option<Arc<Mutex<LatencyCache>>>,
+    /// In-process per-node latency stats updated by the health monitor.
+    pub node_stats: Arc<RwLock<HashMap<String, NodeStats>>>,
 }
 
 impl AppState {
@@ -48,16 +52,18 @@ impl AppState {
             None
         };
 
-        let rate_limiter = if let Ok(url) = std::env::var("REDIS_URL") {
+        let (rate_limiter, latency_cache) = if let Ok(url) = std::env::var("REDIS_URL") {
             let client = redis::Client::open(url).context("invalid REDIS_URL")?;
             let conn = redis::aio::ConnectionManager::new(client)
                 .await
                 .context("failed to connect to Redis")?;
-            tracing::info!("Redis connected — rate limiting enabled");
-            Some(Arc::new(Mutex::new(RateLimiter::new(conn))))
+            tracing::info!("Redis connected — rate limiting and latency cache enabled");
+            let rl = Some(Arc::new(Mutex::new(RateLimiter::new(conn.clone()))));
+            let lc = Some(Arc::new(Mutex::new(LatencyCache::new(conn))));
+            (rl, lc)
         } else {
-            tracing::warn!("REDIS_URL not set — rate limiting disabled");
-            None
+            tracing::warn!("REDIS_URL not set — rate limiting and latency cache disabled");
+            (None, None)
         };
 
         if db.is_none() && api_keys.is_empty() {
@@ -74,6 +80,8 @@ impl AppState {
             coordinator: ShardCoordinator::new(),
             db,
             rate_limiter,
+            latency_cache,
+            node_stats: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 

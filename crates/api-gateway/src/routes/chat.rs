@@ -130,7 +130,8 @@ pub async fn completions(
 ) -> Response {
     let plan = {
         let nodes = state.nodes.read().await;
-        state.coordinator.build_plan(&req.model, &nodes)
+        let stats = state.node_stats.read().await;
+        state.coordinator.build_plan(&req.model, &nodes, &stats)
     };
 
     let db = state.db.clone();

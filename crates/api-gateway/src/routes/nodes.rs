@@ -151,6 +151,7 @@ impl From<DbNode> for NodeInfo {
             status: match r.status.as_str() {
                 "online" => NodeStatus::Online,
                 "busy" => NodeStatus::Busy,
+                "degraded" => NodeStatus::Degraded,
                 _ => NodeStatus::Offline,
             },
             registered_at: r.registered_at,

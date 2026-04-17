@@ -8,6 +8,7 @@
 ///
 /// True tensor-parallel layer splitting requires a llama.cpp RPC backend on each node.
 /// The pipeline protocol below is structurally correct and ready for that upgrade.
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -18,6 +19,7 @@ use tracing::{info, warn};
 
 use shard_planner::{plan_shards, ModelRegistry, NodeCapacity, ShardPlan};
 
+use crate::cache::NodeStats;
 use crate::nodes::{NodeInfo, NodeStatus};
 use crate::routes::chat::{ChatCompletionRequest, ChatMessage};
 
@@ -49,11 +51,36 @@ impl ShardCoordinator {
     }
 
     /// Build a shard plan for `model` against the currently online nodes.
-    /// Returns `None` if no nodes are available or VRAM is insufficient.
-    pub fn build_plan(&self, model: &str, nodes: &[NodeInfo]) -> Option<ShardPlan> {
-        let capacities: Vec<NodeCapacity> = nodes
+    ///
+    /// Nodes are pre-sorted by (VRAM DESC, p50 ASC) before being passed to the
+    /// planner.  Since the planner uses a stable sort on VRAM, equal-VRAM nodes
+    /// preserve the p50 ordering, so the lowest-latency node among equals
+    /// becomes the controller.  Degraded and offline nodes are excluded.
+    ///
+    /// Returns `None` if no online nodes are available or VRAM is insufficient.
+    pub fn build_plan(
+        &self,
+        model: &str,
+        nodes: &[NodeInfo],
+        stats: &HashMap<String, NodeStats>,
+    ) -> Option<ShardPlan> {
+        let mut candidates: Vec<&NodeInfo> = nodes
             .iter()
             .filter(|n| n.status == NodeStatus::Online)
+            .collect();
+
+        // Sort (VRAM DESC, p50 ASC) — planner's stable VRAM sort preserves p50
+        // ordering for equal-VRAM nodes.
+        candidates.sort_by(|a, b| {
+            b.vram_mb.cmp(&a.vram_mb).then_with(|| {
+                let pa = stats.get(&a.id).map(|s| s.p50_ms).unwrap_or(f64::MAX);
+                let pb = stats.get(&b.id).map(|s| s.p50_ms).unwrap_or(f64::MAX);
+                pa.partial_cmp(&pb).unwrap_or(std::cmp::Ordering::Equal)
+            })
+        });
+
+        let capacities: Vec<NodeCapacity> = candidates
+            .into_iter()
             .map(|n| NodeCapacity {
                 node_id: n.id.clone(),
                 host: n.host.clone(),

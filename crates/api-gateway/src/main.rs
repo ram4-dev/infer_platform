@@ -1,6 +1,7 @@
 mod auth;
 mod cache;
 mod db;
+mod health_monitor;
 mod models;
 mod nodes;
 mod routes;
@@ -39,6 +40,7 @@ async fn main() -> Result<()> {
     let addr = format!("0.0.0.0:{port}");
 
     stale_nodes::spawn(state.clone());
+    health_monitor::spawn(state.clone());
 
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -52,6 +54,7 @@ fn build_router(state: Arc<AppState>) -> Router {
     let authed = Router::new()
         .route("/v1/chat/completions", post(routes::chat::completions))
         .route("/v1/models", get(routes::models::list))
+        .route("/v1/models/:id", get(routes::models::get))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_api_key,
