@@ -2,6 +2,7 @@
 members = [
     "crates/api-gateway",
     "crates/node-agent",
+    "crates/shard-planner",
 ]
 resolver = "2"
 
@@ -22,3 +23,4 @@ dotenvy = "0.15"
 bytes = "1"
 sysinfo = "0.32"
 chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1"

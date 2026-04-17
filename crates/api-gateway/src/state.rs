@@ -5,12 +5,15 @@ use anyhow::{Context, Result};
 use tokio::sync::RwLock;
 
 use crate::nodes::NodeInfo;
+use crate::shard_coordinator::ShardCoordinator;
 
 pub struct AppState {
     pub api_keys: HashSet<String>,
     pub internal_key: String,
+    /// Fallback Ollama URL used when no nodes are registered.
     pub ollama_url: String,
     pub nodes: Arc<RwLock<Vec<NodeInfo>>>,
+    pub coordinator: ShardCoordinator,
 }
 
 impl AppState {
@@ -39,6 +42,7 @@ impl AppState {
             internal_key,
             ollama_url,
             nodes: Arc::new(RwLock::new(Vec::new())),
+            coordinator: ShardCoordinator::new(),
         })
     }
 

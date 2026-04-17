@@ -2,6 +2,7 @@ mod auth;
 mod models;
 mod nodes;
 mod routes;
+mod shard_coordinator;
 mod state;
 
 use std::sync::Arc;

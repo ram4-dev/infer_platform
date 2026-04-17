@@ -23,3 +23,4 @@ anyhow = { workspace = true }
 dotenvy = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+shard-planner = { path = "../shard-planner" }

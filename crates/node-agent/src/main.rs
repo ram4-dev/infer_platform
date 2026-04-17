@@ -1,5 +1,6 @@
 mod hardware;
 mod registration;
+mod shard;
 
 use std::sync::Arc;
 
@@ -19,13 +20,14 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use hardware::HardwareInfo;
 
 #[derive(Clone)]
-struct AgentState {
-    hardware: Arc<HardwareInfo>,
-    started_at: chrono::DateTime<Utc>,
-    coordinator_url: String,
-    node_name: String,
-    node_port: u16,
-    registration_ok: Arc<RwLock<bool>>,
+pub struct AgentState {
+    pub hardware: Arc<HardwareInfo>,
+    pub started_at: chrono::DateTime<Utc>,
+    pub coordinator_url: String,
+    pub node_name: String,
+    pub node_port: u16,
+    pub agent_port: u16,
+    pub registration_ok: Arc<RwLock<bool>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -73,6 +75,7 @@ async fn main() -> Result<()> {
         coordinator_url: coordinator_url.clone(),
         node_name: node_name.clone(),
         node_port,
+        agent_port,
         registration_ok: Arc::new(RwLock::new(false)),
     };
 
@@ -86,6 +89,7 @@ async fn main() -> Result<()> {
         .route("/health", get(health_handler))
         .route("/info", get(info_handler))
         .route("/ping", get(|| async { "pong" }))
+        .route("/infer/shard", axum::routing::post(shard::forward))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 

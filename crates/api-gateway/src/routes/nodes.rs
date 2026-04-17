@@ -18,6 +18,7 @@ pub async fn register(
         name: req.name,
         host: req.host,
         port: req.port,
+        agent_port: req.agent_port,
         gpu_name: req.gpu_name,
         vram_mb: req.vram_mb,
         status: NodeStatus::Online,

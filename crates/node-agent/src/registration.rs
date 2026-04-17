@@ -14,6 +14,7 @@ pub async fn register_loop(state: AgentState) {
         "name": state.node_name,
         "host": local_ip(),
         "port": state.node_port,
+        "agent_port": state.agent_port,
         "gpu_name": state.hardware.gpu_name,
         "vram_mb": state.hardware.vram_mb,
     });

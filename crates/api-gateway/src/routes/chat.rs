@@ -12,12 +12,12 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::warn;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::state::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
@@ -34,7 +34,8 @@ pub struct ChatMessage {
     pub content: String,
 }
 
-// Ollama /api/chat request
+// ── Ollama wire types ────────────────────────────────────────────────────────
+
 #[derive(Debug, Serialize)]
 struct OllamaChatRequest<'a> {
     model: &'a str,
@@ -54,7 +55,6 @@ struct OllamaOptions {
     top_p: Option<f32>,
 }
 
-// Ollama streaming chunk
 #[derive(Debug, Deserialize)]
 struct OllamaChunk {
     message: Option<OllamaChunkMessage>,
@@ -66,7 +66,8 @@ struct OllamaChunkMessage {
     content: String,
 }
 
-// OpenAI SSE chunk types
+// ── OpenAI response types ────────────────────────────────────────────────────
+
 #[derive(Debug, Serialize)]
 struct ChatCompletionChunk {
     id: String,
@@ -91,7 +92,6 @@ struct Delta {
     content: Option<String>,
 }
 
-// Non-streaming response types
 #[derive(Debug, Serialize)]
 struct ChatCompletionResponse {
     id: String,
@@ -116,18 +116,70 @@ struct Usage {
     total_tokens: u32,
 }
 
+// ── Handler ──────────────────────────────────────────────────────────────────
+
 pub async fn completions(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Response {
+    // Resolve which node(s) should handle this request.
+    let plan = {
+        let nodes = state.nodes.read().await;
+        state.coordinator.build_plan(&req.model, &nodes)
+    };
+
     if req.stream {
-        stream_response(state, req).await
+        // Streaming: always proxy directly to the controller's Ollama.
+        // Multi-node pipeline streaming is a future enhancement.
+        let ollama_base = plan
+            .as_ref()
+            .map(|p| p.controller().ollama_base_url())
+            .unwrap_or_else(|| state.ollama_url.clone());
+
+        if let Some(ref p) = plan {
+            if !p.is_single_node() {
+                info!(
+                    model = req.model,
+                    shards = p.assignments.len(),
+                    "streaming: falling back to controller node (pipeline streaming pending)"
+                );
+            }
+        }
+
+        stream_response(ollama_base, req).await
     } else {
-        non_stream_response(state, req).await.into_response()
+        // Non-streaming: use full pipeline execution for multi-node plans.
+        let request_id = Uuid::new_v4().to_string();
+
+        match plan {
+            Some(ref p) if !p.is_single_node() => {
+                match state.coordinator.execute(&req, p, &request_id).await {
+                    Ok(ollama_body) => {
+                        build_openai_response(ollama_body, &req.model, &request_id)
+                            .into_response()
+                    }
+                    Err(e) => {
+                        warn!("pipeline execution failed: {e}");
+                        error_json(StatusCode::BAD_GATEWAY, &e.to_string())
+                    }
+                }
+            }
+            _ => {
+                let ollama_base = plan
+                    .as_ref()
+                    .map(|p| p.controller().ollama_base_url())
+                    .unwrap_or_else(|| state.ollama_url.clone());
+                non_stream_response(ollama_base, &request_id, req)
+                    .await
+                    .into_response()
+            }
+        }
     }
 }
 
-async fn stream_response(state: Arc<AppState>, req: ChatCompletionRequest) -> Response {
+// ── Streaming path ───────────────────────────────────────────────────────────
+
+async fn stream_response(ollama_base: String, req: ChatCompletionRequest) -> Response {
     let completion_id = format!("chatcmpl-{}", Uuid::new_v4().simple());
     let created = chrono::Utc::now().timestamp();
     let model = req.model.clone();
@@ -139,47 +191,27 @@ async fn stream_response(state: Arc<AppState>, req: ChatCompletionRequest) -> Re
         options: build_options(&req),
     };
 
-    let url = format!("{}/api/chat", state.ollama_url);
+    let url = format!("{ollama_base}/api/chat");
     let client = reqwest::Client::new();
 
     let ollama_resp = match client.post(&url).json(&ollama_req).send().await {
         Ok(r) if r.status().is_success() => r,
         Ok(r) => {
             let status = r.status();
-            warn!("Ollama returned {status}");
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": {
-                        "message": format!("Inference backend returned {status}"),
-                        "type": "server_error"
-                    }
-                })),
-            )
-                .into_response();
+            warn!("Ollama returned {status} at {url}");
+            return error_json(StatusCode::BAD_GATEWAY, &format!("backend returned {status}"));
         }
         Err(e) => {
-            warn!("Failed to reach Ollama: {e}");
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": {
-                        "message": "Inference backend unavailable",
-                        "type": "server_error"
-                    }
-                })),
-            )
-                .into_response();
+            warn!("Failed to reach Ollama at {url}: {e}");
+            return error_json(StatusCode::BAD_GATEWAY, "inference backend unavailable");
         }
     };
 
-    // Channel to bridge reqwest byte stream → SSE event stream
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(64);
     let id_clone = completion_id.clone();
     let model_clone = model.clone();
 
     tokio::spawn(async move {
-        // First chunk always includes the role delta
         let role_chunk = ChatCompletionChunk {
             id: id_clone.clone(),
             object: "chat.completion.chunk",
@@ -187,10 +219,7 @@ async fn stream_response(state: Arc<AppState>, req: ChatCompletionRequest) -> Re
             model: model_clone.clone(),
             choices: vec![ChunkChoice {
                 index: 0,
-                delta: Delta {
-                    role: Some("assistant"),
-                    content: None,
-                },
+                delta: Delta { role: Some("assistant"), content: None },
                 finish_reason: None,
             }],
         };
@@ -207,14 +236,13 @@ async fn stream_response(state: Arc<AppState>, req: ChatCompletionRequest) -> Re
             let chunk = match chunk_result {
                 Ok(c) => c,
                 Err(e) => {
-                    warn!("Stream read error: {e}");
+                    warn!("stream read error: {e}");
                     break;
                 }
             };
 
             buf.push_str(&String::from_utf8_lossy(&chunk));
 
-            // Ollama sends newline-delimited JSON
             while let Some(nl_pos) = buf.find('\n') {
                 let line = buf[..nl_pos].trim().to_string();
                 buf.drain(..=nl_pos);
@@ -226,13 +254,12 @@ async fn stream_response(state: Arc<AppState>, req: ChatCompletionRequest) -> Re
                 let ollama_chunk: OllamaChunk = match serde_json::from_str(&line) {
                     Ok(c) => c,
                     Err(e) => {
-                        warn!("Failed to parse Ollama chunk '{line}': {e}");
+                        warn!("failed to parse Ollama chunk '{line}': {e}");
                         continue;
                     }
                 };
 
                 if ollama_chunk.done {
-                    // Final chunk with finish_reason
                     let final_chunk = ChatCompletionChunk {
                         id: id_clone.clone(),
                         object: "chat.completion.chunk",
@@ -240,10 +267,7 @@ async fn stream_response(state: Arc<AppState>, req: ChatCompletionRequest) -> Re
                         model: model_clone.clone(),
                         choices: vec![ChunkChoice {
                             index: 0,
-                            delta: Delta {
-                                role: None,
-                                content: None,
-                            },
+                            delta: Delta { role: None, content: None },
                             finish_reason: Some("stop"),
                         }],
                     };
@@ -265,10 +289,7 @@ async fn stream_response(state: Arc<AppState>, req: ChatCompletionRequest) -> Re
                             model: model_clone.clone(),
                             choices: vec![ChunkChoice {
                                 index: 0,
-                                delta: Delta {
-                                    role: None,
-                                    content: Some(msg.content),
-                                },
+                                delta: Delta { role: None, content: Some(msg.content) },
                                 finish_reason: None,
                             }],
                         };
@@ -282,7 +303,6 @@ async fn stream_response(state: Arc<AppState>, req: ChatCompletionRequest) -> Re
             }
         }
 
-        // If we reach here without a done chunk, send [DONE] anyway
         let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
     });
 
@@ -291,12 +311,15 @@ async fn stream_response(state: Arc<AppState>, req: ChatCompletionRequest) -> Re
         .into_response()
 }
 
+// ── Non-streaming path ───────────────────────────────────────────────────────
+
 async fn non_stream_response(
-    state: Arc<AppState>,
+    ollama_base: String,
+    request_id: &str,
     req: ChatCompletionRequest,
-) -> Result<Json<ChatCompletionResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let completion_id = format!("chatcmpl-{}", Uuid::new_v4().simple());
-    let created = chrono::Utc::now().timestamp();
+) -> Result<Json<ChatCompletionResponse>, Response> {
+    let url = format!("{ollama_base}/api/chat");
+    let client = reqwest::Client::new();
 
     let ollama_req = OllamaChatRequest {
         model: &req.model,
@@ -305,72 +328,63 @@ async fn non_stream_response(
         options: build_options(&req),
     };
 
-    let url = format!("{}/api/chat", state.ollama_url);
-    let client = reqwest::Client::new();
-
     let resp = client
         .post(&url)
         .json(&ollama_req)
         .send()
         .await
         .map_err(|e| {
-            warn!("Failed to reach Ollama: {e}");
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": {"message": "Inference backend unavailable", "type": "server_error"}
-                })),
-            )
+            warn!("Failed to reach Ollama at {url}: {e}");
+            error_json(StatusCode::BAD_GATEWAY, "inference backend unavailable")
         })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
-        warn!("Ollama returned {status}");
-        return Err((
+        warn!("Ollama returned {status} at {url}");
+        return Err(error_json(
             StatusCode::BAD_GATEWAY,
-            Json(json!({
-                "error": {"message": format!("Inference backend returned {status}"), "type": "server_error"}
-            })),
+            &format!("backend returned {status}"),
         ));
     }
 
-    // Non-streaming Ollama response has a single JSON object (not NDJSON)
     let body: serde_json::Value = resp.json().await.map_err(|e| {
         warn!("Failed to parse Ollama response: {e}");
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({
-                "error": {"message": "Invalid response from inference backend", "type": "server_error"}
-            })),
-        )
+        error_json(StatusCode::BAD_GATEWAY, "invalid response from backend")
     })?;
 
-    let content = body
+    Ok(build_openai_response(body, &req.model, request_id))
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+fn build_openai_response(
+    ollama_body: serde_json::Value,
+    model: &str,
+    request_id: &str,
+) -> Json<ChatCompletionResponse> {
+    let content = ollama_body
         .pointer("/message/content")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
 
-    let prompt_tokens = body
+    let prompt_tokens = ollama_body
         .pointer("/prompt_eval_count")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
-    let completion_tokens = body
+    let completion_tokens = ollama_body
         .pointer("/eval_count")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
 
-    Ok(Json(ChatCompletionResponse {
-        id: completion_id,
+    Json(ChatCompletionResponse {
+        id: format!("chatcmpl-{request_id}"),
         object: "chat.completion",
-        created,
-        model: req.model,
+        created: chrono::Utc::now().timestamp(),
+        model: model.to_string(),
         choices: vec![CompletionChoice {
             index: 0,
-            message: ChatMessage {
-                role: "assistant".to_string(),
-                content,
-            },
+            message: ChatMessage { role: "assistant".to_string(), content },
             finish_reason: "stop",
         }],
         usage: Usage {
@@ -378,7 +392,7 @@ async fn non_stream_response(
             completion_tokens,
             total_tokens: prompt_tokens + completion_tokens,
         },
-    }))
+    })
 }
 
 fn build_options(req: &ChatCompletionRequest) -> Option<OllamaOptions> {
@@ -390,4 +404,14 @@ fn build_options(req: &ChatCompletionRequest) -> Option<OllamaOptions> {
         temperature: req.temperature,
         top_p: req.top_p,
     })
+}
+
+fn error_json(status: StatusCode, message: &str) -> Response {
+    (
+        status,
+        Json(json!({
+            "error": { "message": message, "type": "server_error" }
+        })),
+    )
+        .into_response()
 }
