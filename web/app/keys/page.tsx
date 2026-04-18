@@ -36,10 +36,21 @@ interface CreatedKey extends ApiKey {
   key: string;
 }
 
+interface KeyUsageSummary {
+  key_id: string;
+  request_count: number;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  total_tokens: number;
+}
+
 // ---------- Page ----------
 
 export default function KeysPage() {
   const [keys, setKeys] = useState<ApiKey[]>([]);
+  const [usageMap, setUsageMap] = useState<Map<string, KeyUsageSummary>>(
+    new Map()
+  );
   const [loading, setLoading] = useState(true);
   const [newKey, setNewKey] = useState<CreatedKey | null>(null);
   const [owner, setOwner] = useState("");
@@ -49,12 +60,23 @@ export default function KeysPage() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  async function loadKeys() {
+  async function loadData() {
     setLoading(true);
     try {
-      const res = await fetch("/api/keys");
-      const body = await res.json();
-      setKeys(body.data ?? []);
+      const [keysRes, usageRes] = await Promise.all([
+        fetch("/api/keys"),
+        fetch("/api/usage"),
+      ]);
+      const keysBody = await keysRes.json();
+      const usageBody = await usageRes.json();
+
+      setKeys(keysBody.data ?? []);
+
+      const map = new Map<string, KeyUsageSummary>();
+      for (const entry of usageBody.by_key ?? []) {
+        map.set(entry.key_id, entry);
+      }
+      setUsageMap(map);
     } catch {
       setError("Could not reach the gateway. Is it running?");
     } finally {
@@ -63,7 +85,7 @@ export default function KeysPage() {
   }
 
   useEffect(() => {
-    loadKeys();
+    loadData();
   }, []);
 
   function handleCreate() {
@@ -91,7 +113,7 @@ export default function KeysPage() {
         setNewKey(created);
         setOwner("");
         setRpm("60");
-        await loadKeys();
+        await loadData();
       } catch {
         setError("Failed to create key — gateway unreachable");
       }
@@ -108,7 +130,7 @@ export default function KeysPage() {
       if (!res.ok && res.status !== 204) {
         setError("Failed to revoke key");
       } else {
-        await loadKeys();
+        await loadData();
       }
     } catch {
       setError("Failed to revoke key — gateway unreachable");
@@ -150,6 +172,18 @@ export default function KeysPage() {
             API Keys
           </Link>
           <Link
+            href="/models"
+            className="hover:text-foreground transition-colors text-xs"
+          >
+            Models
+          </Link>
+          <Link
+            href="/dashboard/consumer"
+            className="hover:text-foreground transition-colors text-xs"
+          >
+            Usage
+          </Link>
+          <Link
             href="/provider"
             className="hover:text-foreground transition-colors text-xs"
           >
@@ -158,7 +192,7 @@ export default function KeysPage() {
         </div>
       </nav>
 
-      <div className="flex-1 px-6 py-10 max-w-4xl mx-auto w-full space-y-8">
+      <div className="flex-1 px-6 py-10 max-w-5xl mx-auto w-full space-y-8">
         {/* New key banner */}
         {newKey && (
           <Card className="border-primary/40 bg-primary/5">
@@ -205,8 +239,8 @@ export default function KeysPage() {
             <CardTitle>Create API key</CardTitle>
             <CardDescription>
               Keys authenticate requests to{" "}
-              <code className="font-mono text-xs">/v1/chat/completions</code> and{" "}
-              <code className="font-mono text-xs">/v1/models</code>.
+              <code className="font-mono text-xs">/v1/chat/completions</code>{" "}
+              and <code className="font-mono text-xs">/v1/models</code>.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -263,43 +297,60 @@ export default function KeysPage() {
               No active keys. Create one above.
             </p>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>ID</TableHead>
-                  <TableHead>Owner</TableHead>
-                  <TableHead>Rate limit</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {activeKeys.map((key) => (
-                  <TableRow key={key.id}>
-                    <TableCell className="font-mono text-xs">
-                      {key.id.slice(0, 8)}…
-                    </TableCell>
-                    <TableCell className="text-xs">{key.owner}</TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {key.rate_limit_rpm} rpm
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {new Date(key.created_at).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="destructive"
-                        size="xs"
-                        onClick={() => handleRevoke(key.id)}
-                        disabled={revoking === key.id}
-                      >
-                        {revoking === key.id ? "Revoking…" : "Revoke"}
-                      </Button>
-                    </TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>ID</TableHead>
+                    <TableHead>Owner</TableHead>
+                    <TableHead>Rate limit</TableHead>
+                    <TableHead>Requests</TableHead>
+                    <TableHead>Tokens</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead />
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {activeKeys.map((key) => {
+                    const usage = usageMap.get(key.id);
+                    return (
+                      <TableRow key={key.id}>
+                        <TableCell className="font-mono text-xs">
+                          {key.id.slice(0, 8)}…
+                        </TableCell>
+                        <TableCell className="text-xs">{key.owner}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {key.rate_limit_rpm} rpm
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {usage ? usage.request_count.toLocaleString() : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {usage ? formatTokens(usage.total_tokens) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {new Date(key.created_at).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="destructive"
+                            size="xs"
+                            onClick={() => handleRevoke(key.id)}
+                            disabled={revoking === key.id}
+                          >
+                            {revoking === key.id ? "Revoking…" : "Revoke"}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </section>
 
@@ -341,4 +392,12 @@ export default function KeysPage() {
       </div>
     </main>
   );
+}
+
+// ---------- Formatter ----------
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
 }
