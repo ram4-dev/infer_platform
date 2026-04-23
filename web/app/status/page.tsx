@@ -1,6 +1,5 @@
 import { Suspense } from "react";
 import Link from "next/link";
-import { cacheLife } from "next/cache";
 import {
   Card,
   CardContent,
@@ -21,7 +20,7 @@ import { Separator } from "@/components/ui/separator";
 
 // ---------- Types ----------
 
-type NodeStatus = "online" | "offline" | "busy";
+type NodeStatus = "online" | "offline" | "busy" | "degraded";
 
 interface NodeInfo {
   id: string;
@@ -31,14 +30,10 @@ interface NodeInfo {
   gpu_name: string;
   vram_mb: number;
   status: NodeStatus;
+  model?: string;
+  license?: string;
   registered_at: string;
   last_seen: string;
-}
-
-interface ModelInfo {
-  id: string;
-  object: string;
-  owned_by: string;
 }
 
 // ---------- Data fetchers ----------
@@ -60,24 +55,17 @@ async function fetchNodes(): Promise<NodeInfo[]> {
   }
 }
 
-async function fetchModels(): Promise<ModelInfo[]> {
-  "use cache";
-  cacheLife("minutes");
-
-  const base =
-    process.env.NEXT_PUBLIC_SITE_URL ??
-    process.env.VERCEL_URL ??
-    "http://localhost:3000";
-  const url = `${base.startsWith("http") ? base : `https://${base}`}/api/models`;
-
-  try {
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    const body = await res.json();
-    return body.data ?? [];
-  } catch {
-    return [];
+function modelsFromNodes(nodes: NodeInfo[]): Array<{ id: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const node of nodes) {
+    if (node.status !== "online") continue;
+    if (!node.model) continue;
+    counts.set(node.model, (counts.get(node.model) ?? 0) + 1);
   }
+
+  return [...counts.entries()]
+    .map(([id, count]) => ({ id, count }))
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 // ---------- Page ----------
@@ -148,11 +136,12 @@ export default function StatusPage() {
 // ---------- Dynamic components ----------
 
 async function SummaryCards() {
-  const [nodes, models] = await Promise.all([fetchNodes(), fetchModels()]);
+  const nodes = await fetchNodes();
 
   const onlineNodes = nodes.filter((n) => n.status === "online");
   const totalVram = nodes.reduce((sum, n) => sum + n.vram_mb, 0);
   const totalVramGb = (totalVram / 1024).toFixed(1);
+  const models = modelsFromNodes(nodes);
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -169,7 +158,7 @@ async function SummaryCards() {
       <StatCard
         title="Models available"
         value={String(models.length)}
-        sub={models.length === 0 ? "Gateway offline" : "Via Ollama backend"}
+        sub={models.length === 0 ? "No online model capacity" : "Online model pools"}
       />
     </div>
   );
@@ -195,6 +184,7 @@ async function NodesTable() {
           <TableHead>VRAM</TableHead>
           <TableHead>Host</TableHead>
           <TableHead>Status</TableHead>
+          <TableHead>Model</TableHead>
           <TableHead>Last seen</TableHead>
         </TableRow>
       </TableHeader>
@@ -212,6 +202,9 @@ async function NodesTable() {
             <TableCell>
               <NodeStatusBadge status={node.status} />
             </TableCell>
+            <TableCell className="font-mono text-xs">
+              {node.model ?? "—"}
+            </TableCell>
             <TableCell className="text-xs text-muted-foreground">
               {new Date(node.last_seen).toLocaleTimeString()}
             </TableCell>
@@ -223,12 +216,13 @@ async function NodesTable() {
 }
 
 async function ModelsList() {
-  const models = await fetchModels();
+  const nodes = await fetchNodes();
+  const models = modelsFromNodes(nodes);
 
   if (models.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No models available. Ensure the gateway can reach Ollama.
+        No models available. Register online nodes with a configured model.
       </p>
     );
   }
@@ -237,7 +231,7 @@ async function ModelsList() {
     <div className="flex flex-wrap gap-2">
       {models.map((model) => (
         <Badge key={model.id} variant="secondary" className="font-mono text-xs">
-          {model.id}
+          {model.id} · {model.count} node{model.count === 1 ? "" : "s"}
         </Badge>
       ))}
     </div>
@@ -275,6 +269,7 @@ function NodeStatusBadge({ status }: { status: NodeStatus }) {
     {
       online: "default",
       busy: "secondary",
+      degraded: "secondary",
       offline: "destructive",
     };
   return (

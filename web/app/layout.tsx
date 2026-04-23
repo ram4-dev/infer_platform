@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Infer Platform",
   description:
-    "Distributed AI inference. Pool consumer GPUs, shard LLMs, get an OpenAI-compatible API.",
+    "Distributed AI inference. Pool consumer GPUs, route by model, get an OpenAI-compatible API.",
 };
 
 export default function RootLayout({

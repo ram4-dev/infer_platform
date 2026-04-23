@@ -1,30 +1,23 @@
 # Build stage
-FROM rust:1.82-slim-bookworm AS builder
-
-RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+FROM golang:1.26-bookworm AS builder
 
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
-COPY crates/ crates/
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ cmd/
+COPY internal/ internal/
 
-RUN cargo build --release --bin api-gateway --bin node-agent
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/api-gateway ./cmd/api-gateway
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/node-agent ./cmd/node-agent
 
 # api-gateway runtime
-FROM debian:bookworm-slim AS api-gateway
-
-RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /build/target/release/api-gateway /usr/local/bin/api-gateway
-
+FROM gcr.io/distroless/base-debian12 AS api-gateway
+COPY --from=builder /out/api-gateway /usr/local/bin/api-gateway
 EXPOSE 8080
-CMD ["api-gateway"]
+CMD ["/usr/local/bin/api-gateway"]
 
 # node-agent runtime
-FROM debian:bookworm-slim AS node-agent
-
-RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /build/target/release/node-agent /usr/local/bin/node-agent
-
+FROM gcr.io/distroless/base-debian12 AS node-agent
+COPY --from=builder /out/node-agent /usr/local/bin/node-agent
 EXPOSE 8181
-CMD ["node-agent"]
+CMD ["/usr/local/bin/node-agent"]
