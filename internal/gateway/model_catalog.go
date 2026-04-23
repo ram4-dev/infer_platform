@@ -8,11 +8,12 @@ func NewModelCatalog() *ModelCatalog {
 	entries := map[string]string{
 		"llama3.1:8b":    "llama-3.1",
 		"llama3:8b":      "llama-3",
-		"qwen2.5:0.5b":  "apache-2.0",
+		"qwen2.5:0.5b":   "apache-2.0",
 		"qwen2.5:7b":     "apache-2.0",
 		"mistral:7b":     "apache-2.0",
 		"phi4:14b":       "mit",
 		"deepseek-r1:8b": "mit",
+		"gemma3:4b":      "gemma",
 		"stream-model":   "apache-2.0",
 		"failover-model": "apache-2.0",
 	}

@@ -84,8 +84,22 @@ go build -o "$TMP_DIR/api-gateway" ./cmd/api-gateway
 go build -o "$TMP_DIR/node-agent" ./cmd/node-agent
 
 echo "==> Verifying gateway requires DATABASE_URL"
-if PORT="$GATEWAY_PORT" INFER_INTERNAL_KEY="$INTERNAL_KEY" ROUTING_MODE=single_node_model "$TMP_DIR/api-gateway" >"$TMP_DIR/gateway-no-db.log" 2>&1; then
-  echo "Gateway unexpectedly started without DATABASE_URL" >&2
+env -u DATABASE_URL PORT="$GATEWAY_PORT" INFER_INTERNAL_KEY="$INTERNAL_KEY" ROUTING_MODE=single_node_model "$TMP_DIR/api-gateway" >"$TMP_DIR/gateway-no-db.log" 2>&1 &
+NO_DB_PID=$!
+no_db_failed=0
+for _ in $(seq 1 10); do
+  if ! kill -0 "$NO_DB_PID" >/dev/null 2>&1; then
+    wait "$NO_DB_PID" || true
+    no_db_failed=1
+    break
+  fi
+  sleep 0.5
+done
+if [ "$no_db_failed" -ne 1 ]; then
+  echo "Gateway did not fail fast without DATABASE_URL" >&2
+  echo "--- gateway-no-db.log ---" >&2
+  cat "$TMP_DIR/gateway-no-db.log" >&2 || true
+  kill "$NO_DB_PID" >/dev/null 2>&1 || true
   exit 1
 fi
 
