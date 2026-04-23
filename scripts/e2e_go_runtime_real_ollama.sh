@@ -13,8 +13,13 @@ INTERNAL_KEY="${INTERNAL_KEY:-internal_dev_secret}"
 DATABASE_URL="${DATABASE_URL:-postgres://infer:infer_dev_password@127.0.0.1:5432/infer?sslmode=disable}"
 
 cleanup() {
+  local exit_code=$?
   jobs -pr | xargs -r kill >/dev/null 2>&1 || true
-  rm -rf "$TMP_DIR"
+  if [ $exit_code -ne 0 ]; then
+    echo "Preserving logs in: $TMP_DIR" >&2
+  else
+    rm -rf "$TMP_DIR"
+  fi
 }
 trap cleanup EXIT
 
@@ -26,7 +31,41 @@ need_cmd go
 need_cmd curl
 need_cmd python3
 
+check_tcp() {
+  python3 - "$1" "$2" <<'PY'
+import socket, sys
+host = sys.argv[1]
+port = int(sys.argv[2])
+s = socket.socket()
+s.settimeout(2)
+try:
+    s.connect((host, port))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+}
+
+DB_HOST="$(python3 - <<PY
+from urllib.parse import urlparse
+print(urlparse('${DATABASE_URL}').hostname or '127.0.0.1')
+PY
+)"
+DB_PORT="$(python3 - <<PY
+from urllib.parse import urlparse
+u = urlparse('${DATABASE_URL}')
+print(u.port or 5432)
+PY
+)"
+
 cd "$ROOT_DIR"
+
+echo "==> Checking PostgreSQL availability at ${DB_HOST}:${DB_PORT}"
+if ! check_tcp "$DB_HOST" "$DB_PORT"; then
+  echo "PostgreSQL is not reachable at ${DB_HOST}:${DB_PORT}" >&2
+  exit 1
+fi
 
 echo "==> Checking Ollama availability at ${OLLAMA_BASE_URL}"
 curl -fsS "${OLLAMA_BASE_URL}/api/tags" >/dev/null
@@ -57,13 +96,20 @@ INFER_INTERNAL_KEY="$INTERNAL_KEY" \
 ROUTING_MODE=single_node_model \
 "$TMP_DIR/api-gateway" >"$TMP_DIR/gateway.log" 2>&1 &
 
+gateway_ready=0
 for _ in $(seq 1 40); do
   if curl -fsS "http://127.0.0.1:${GATEWAY_PORT}/health" >/dev/null 2>&1; then
+    gateway_ready=1
     break
   fi
   sleep 0.5
 done
-curl -fsS "http://127.0.0.1:${GATEWAY_PORT}/health" >/dev/null
+if [ "$gateway_ready" -ne 1 ]; then
+  echo "Gateway failed to become healthy" >&2
+  echo "--- gateway.log ---" >&2
+  cat "$TMP_DIR/gateway.log" >&2 || true
+  exit 1
+fi
 
 echo "==> Creating API key"
 API_KEY="$(curl -fsS -H "Authorization: Bearer ${INTERNAL_KEY}" -H 'Content-Type: application/json' \
