@@ -35,11 +35,11 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DATABASE_URL: postgres://infer:infer_dev_password@postgres:5432/infer
+      DATABASE_URL: postgres://infer:infer_dev_password@postgres:5432/infer?sslmode=disable
       REDIS_URL: redis://redis:6379
       INFER_INTERNAL_KEY: internal_dev_secret
-      INFER_API_KEYS: ""
       OLLAMA_URL: http://node-agent:11434
+      ROUTING_MODE: single_node_model
       RUST_LOG: api_gateway=info,tower_http=info
     depends_on:
       postgres:
@@ -60,6 +60,7 @@ services:
       NODE_NAME: local-node-1
       NODE_PORT: "11434"
       AGENT_PORT: "8181"
+      NODE_MODEL: llama3.1:8b
       RUST_LOG: node_agent=info,tower_http=info
     depends_on:
       - api-gateway

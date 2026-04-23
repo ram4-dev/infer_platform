@@ -1,247 +1,128 @@
 # Contributing
 
-## Prerequisites
+## Requisitos
+- Go 1.26+
+- Node.js 20+
+- Docker + docker-compose
+- [Ollama](https://ollama.ai) corriendo localmente con al menos un modelo descargado
 
-- Rust 1.82+ (`rustup update stable`)
-- Node.js 20+ and npm
-- Docker + Docker Compose (for local stack)
-- [Ollama](https://ollama.ai) installed and running with at least one model pulled
-
-## Local Development
-
-### 1. Start dependencies
-
+## Desarrollo local
+### 1. Levantar dependencias opcionales
 ```bash
-docker compose up postgres redis -d
+docker-compose up postgres redis -d
 ```
 
-### 2. Run the API gateway
-
+### 2. Ejecutar el API gateway
 ```bash
-cd crates/api-gateway
-cat > .env <<'EOF'
-DATABASE_URL=postgres://infer:infer_dev_password@localhost:5432/infer
-REDIS_URL=redis://localhost:6379
-INFER_INTERNAL_KEY=dev_secret
-INFER_API_KEYS=dev_key_1
-OLLAMA_URL=http://localhost:11434
-RUST_LOG=api_gateway=debug,tower_http=info
-EOF
-cargo run
+cd cmd/api-gateway
+cp .env.example .env
+# ajusta DATABASE_URL / REDIS_URL si quieres modo persistente
+cd ../..
+go run ./cmd/api-gateway
 ```
 
-### 3. Run a node agent
-
+### 3. Ejecutar un node-agent
 ```bash
-cd crates/node-agent
-cat > .env <<'EOF'
-COORDINATOR_URL=http://localhost:8080
-INFER_INTERNAL_KEY=dev_secret
-NODE_NAME=local-dev-node
-NODE_HOST=127.0.0.1
-RUST_LOG=node_agent=debug
-EOF
-cargo run
+cd cmd/node-agent
+cp .env.example .env
+cd ../..
+NODE_MODEL=llama3.1:8b \
+NODE_MODEL_LICENSE=llama-3.1 \
+go run ./cmd/node-agent
 ```
 
-### 4. Run the web dashboard
-
+### 4. Ejecutar el dashboard web
 ```bash
 cd web
 cat > .env.local <<'EOF'
 GATEWAY_URL=http://localhost:8080
-GATEWAY_INTERNAL_KEY=dev_secret
-GATEWAY_API_KEY=dev_key_1
+GATEWAY_INTERNAL_KEY=internal_dev_secret
+GATEWAY_API_KEY=pk_your_key_here
 EOF
 npm install
 npm run dev
-# http://localhost:3000
 ```
 
 ## Testing
-
-### Rust tests
-
+### Go
 ```bash
-# All crates
-cargo test --workspace
-
-# Specific crate
-cargo test -p shard-planner
-
-# With logging
-RUST_LOG=debug cargo test -p api-gateway
+go test ./...
+go build ./cmd/api-gateway ./cmd/node-agent
 ```
 
-The shard planner has comprehensive unit tests covering greedy allocation, edge cases (single node, exact fit, insufficient VRAM), and model registry lookups. Run these first when modifying planning logic.
+### E2E runtime
+```bash
+./scripts/e2e_go_runtime.sh
+```
 
-### Type checking (web)
-
+### Web
 ```bash
 cd web
-npm run build   # catches TypeScript errors
+npm run build
 ```
 
-### Integration smoke test
-
-```bash
-# Verify gateway is up
-curl http://localhost:8080/ping
-
-# Verify a node is registered
-curl http://localhost:8080/v1/internal/nodes \
-  -H "Authorization: Bearer dev_secret"
-
-# Test a completion
-curl http://localhost:8080/v1/chat/completions \
-  -H "Authorization: Bearer dev_key_1" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"llama3.2","messages":[{"role":"user","content":"ping"}],"max_tokens":10}'
-```
-
-## Project Structure
-
-```
-crates/
+## Estructura del proyecto
+```text
+cmd/
   api-gateway/
-    src/
-      main.rs              # Server startup, router
-      state.rs             # AppState: DB pool, Redis, node registry, API keys
-      auth.rs              # Key validation middleware
-      cache.rs             # Redis rate limiter + generic TTL cache
-      nodes.rs             # NodeInfo, NodeStatus types
-      shard_coordinator.rs # Plan → execute pipeline
-      db.rs                # PostgreSQL pool init + migrations
-      routes/
-        chat.rs            # POST /v1/chat/completions
-        models.rs          # GET /v1/models
-        nodes.rs           # Internal node registration
-        keys.rs            # Internal key CRUD
-    migrations/            # SQLx migrations (auto-applied on startup)
-
   node-agent/
-    src/
-      main.rs              # Startup, hardware detection, route definitions
-      registration.rs      # Heartbeat loop with exponential backoff
-      shard.rs             # /infer/shard handler + node chaining
-      hardware.rs          # GPU detection via sysinfo
-
-  shard-planner/
-    src/
-      lib.rs               # Public API: plan_shards, ModelRegistry, types
-      planner.rs           # Greedy algorithm + unit tests
-      registry.rs          # Model table + VRAM estimation
-
+internal/
+  gateway/
+  nodeagent/
 web/
-  app/
-    page.tsx               # Landing page
-    status/page.tsx        # Network status dashboard
-    api/nodes/route.ts     # Proxy: GET /v1/internal/nodes
-    api/models/route.ts    # Proxy: GET /v1/models
-  components/              # shadcn/ui + custom components
+docs/
+scripts/
+Dockerfile
+docker-compose.yml
 ```
 
-## Making Changes
+## Cambios habituales
+### Añadir un endpoint nuevo
+1. Añade handler en `internal/gateway/`
+2. Registra la ruta en `internal/gateway/server.go`
+3. Aplica el middleware correcto: API key o internal key
+4. Actualiza `README.md` si cambia la API pública
 
-### Adding a new model to the registry
+### Cambiar esquema DB
+El esquema se aplica desde `internal/gateway/migrations.go`.
+- añade la sentencia SQL nueva al listado de migrations
+- mantén compatibilidad con instalaciones existentes
+- prueba el arranque del gateway con `DATABASE_URL`
 
-Edit `crates/shard-planner/src/registry.rs` — add an entry to the `MODELS` table:
+### Cambiar routing
+- mantén el modo `single_node_model`
+- no introduzcas fallback entre modelos
+- conserva la misma política para streaming y non-streaming
 
-```rust
-ModelSpec {
-    name: "your-model:7b",
-    total_layers: 32,
-    vram_per_layer_mb: 150,
-    context_vram_mb: 512,
-},
+## Estilo
+- comentarios solo cuando expliquen invariantes o decisiones no obvias
+- errores explícitos y respuestas JSON consistentes
+- logs estructurados y sobrios
+- centraliza env vars en el arranque del servicio
+
+## Commits
+Convención recomendada:
+```text
+feat(gateway): add per-model metric
+fix(node-agent): retry registration on timeout
+docs: update contributing guide
 ```
 
-Values are approximate. The `context_vram_mb` accounts for embeddings and KV cache (typically 256–1024 MB depending on context length and quantization).
-
-### Adding a new API endpoint
-
-1. Add handler in `crates/api-gateway/src/routes/`
-2. Register route in `main.rs` router
-3. Add to the appropriate auth layer (public key auth vs internal key)
-4. Update API reference in `README.md`
-
-### Changing the database schema
-
-1. Add a new migration file in `crates/api-gateway/migrations/`
-2. Name it `{N}_{description}.sql` where N is the next sequence number
-3. SQLx runs migrations in order on gateway startup
-
-## Code Style
-
-- **No unnecessary comments.** Code should speak for itself. Only comment non-obvious invariants or workarounds.
-- **Error handling:** use `anyhow` for internal errors, `thiserror` for public error types. Never `.unwrap()` in request handlers.
-- **Logging:** use `tracing::info/warn/error`. Include structured fields (`tracing::info!(node_id = %id, "registered")`).
-- **Environment variables:** always read them in `state.rs` or equivalent startup code, not scattered through handlers.
-
-## Commit Messages
-
-Follow conventional commits:
-
-```
-feat(api-gateway): add per-key daily spend cap enforcement
-fix(node-agent): increase registration timeout to 30s
-docs: add CONTRIBUTING guide
-```
-
-Add `Co-Authored-By: Paperclip <noreply@paperclip.ing>` on agent-generated commits.
-
-## Deployment
-
-See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for full deployment context.
-
-### API Gateway (bare metal / VM)
-
-```bash
-# Build release binary
-cargo build --release --bin api-gateway
-
-# Run with production env
-DATABASE_URL=postgres://... \
-REDIS_URL=redis://... \
-INFER_INTERNAL_KEY=<long-random-secret> \
-./target/release/api-gateway
-```
-
-### API Gateway (Docker)
-
+## Deploy
+### Docker
 ```bash
 docker build --target api-gateway -t infer-gateway:latest .
-docker run -d \
-  -p 8080:8080 \
-  -e DATABASE_URL=postgres://... \
-  -e REDIS_URL=redis://... \
-  -e INFER_INTERNAL_KEY=... \
-  infer-gateway:latest
-```
-
-### Node Agent (Docker)
-
-```bash
 docker build --target node-agent -t infer-agent:latest .
-docker run -d \
-  --network host \
-  -e COORDINATOR_URL=http://<gateway>:8080 \
-  -e INFER_INTERNAL_KEY=<same-as-gateway> \
-  -e NODE_HOST=<this-machine-ip> \
-  -e NODE_NAME=<unique-name> \
-  infer-agent:latest
 ```
 
-The node agent needs `--network host` (or a routable IP via `NODE_HOST`) so the gateway can reach the Ollama port and the agent port from outside the container.
+### Compose
+```bash
+docker-compose up --build
+```
 
-### Web Dashboard (Vercel)
-
-The `web/` directory is a Next.js app configured for Vercel deployment. Set these environment variables in your Vercel project:
-
-| Variable | Value |
-|---|---|
-| `GATEWAY_URL` | Public or private URL of the API gateway |
-| `GATEWAY_INTERNAL_KEY` | Internal key (mark as sensitive) |
-| `GATEWAY_API_KEY` | A valid API key for `/v1/models` |
-
-Set Root Directory to `web` in Vercel project settings (the repo root is a Rust workspace).
+## Referencias
+- `README.md`
+- `ARCHITECTURE.md`
+- `docs/RFC-001-single-node-model-routing.md`
+- `docs/functional-spec.md`
+- `docs/technical-spec.md`

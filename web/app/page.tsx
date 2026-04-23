@@ -43,8 +43,8 @@ export default function Home() {
           Distributed AI inference at your fingertips
         </h1>
         <p className="text-muted-foreground text-lg max-w-xl mb-10">
-          Pool consumer GPU devices into unified clusters, shard LLMs across
-          them, and call it with the same API your code already uses.
+          Pool consumer GPU devices into model-specific clusters and route each
+          request to a healthy node with predictable failover.
         </p>
         <div className="flex items-center gap-4">
           <Link
@@ -75,7 +75,7 @@ export default function Home() {
           <Feature
             icon="🌐"
             title="Distributed GPU pool"
-            description="Nodes anywhere on the internet contribute VRAM. Models are sharded across them automatically."
+            description="Nodes anywhere on the internet contribute VRAM. Requests are balanced across nodes serving the same model."
           />
           <Feature
             icon="🔑"
@@ -104,7 +104,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="border-t border-border px-6 py-6 text-center text-xs text-muted-foreground">
-        infer.ram4.dev · powered by Rust + Axum · inspired by{" "}
+        infer.ram4.dev · powered by Go + Chi · inspired by{" "}
         <a
           href="https://github.com/hyperspaceai/agi/blob/main/docs/PODS.md"
           target="_blank"
