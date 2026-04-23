@@ -8,9 +8,10 @@ Este documento describe cómo validar end-to-end en local el runtime actual de I
 - Redis opcional
 - backend de inferencia simulado o real
 
-Incluye dos recorridos:
-1. **E2E automatizado** con `scripts/e2e_go_runtime.sh`
-2. **E2E manual** con `docker-compose`, `curl` y validaciones funcionales
+Incluye tres recorridos:
+1. **E2E automatizado con backend mock** usando `scripts/e2e_go_runtime.sh`
+2. **E2E automatizado con Ollama real** usando `scripts/e2e_go_runtime_real_ollama.sh`
+3. **E2E manual** con `docker-compose`, `curl` y validaciones funcionales
 
 ---
 
@@ -82,6 +83,48 @@ Revisar:
 - disponibilidad del puerto `5432`
 - disponibilidad de Python 3
 - logs temporales generados por el script
+
+---
+
+## 2.B Opción adicional — Test E2E automatizado con Ollama real
+
+Este flujo valida inferencia real end-to-end usando una instancia local de Ollama y un modelo pequeño.
+
+### Requisitos adicionales
+- Ollama corriendo en `http://127.0.0.1:11434` o en la URL indicada por `OLLAMA_BASE_URL`
+- un modelo pequeño disponible o descargable por API
+
+### Modelo por defecto
+El script usa por defecto:
+
+```text
+qwen2.5:0.5b
+```
+
+### Ejecución
+```bash
+DATABASE_URL=postgres://infer:infer_dev_password@127.0.0.1:5432/infer?sslmode=disable \
+MODEL=qwen2.5:0.5b \
+bash scripts/e2e_go_runtime_real_ollama.sh
+```
+
+### Qué valida
+- que el gateway no arranca sin `DATABASE_URL`
+- que el gateway arranca correctamente con DB
+- que el script puede asegurar la presencia del modelo en Ollama
+- que el node-agent registra el nodo con `model` únicamente
+- que `/v1/internal/nodes` refleja el nodo online
+- que `/v1/models` expone el modelo real registrado
+- que el chat **non-stream** devuelve contenido real del modelo
+- que el chat **stream** emite SSE y termina con `[DONE]`
+
+### Variables útiles
+- `MODEL`
+- `OLLAMA_BASE_URL`
+- `OLLAMA_PORT`
+- `GATEWAY_PORT`
+- `AGENT_PORT`
+- `DATABASE_URL`
 
 ---
 
@@ -438,10 +481,17 @@ Comprobar:
 go test ./...
 ```
 
-### Ejecutar E2E automatizado
+### Ejecutar E2E automatizado con mock
 ```bash
 DATABASE_URL=postgres://infer:infer_dev_password@127.0.0.1:5432/infer?sslmode=disable \
 bash scripts/e2e_go_runtime.sh
+```
+
+### Ejecutar E2E automatizado con Ollama real
+```bash
+DATABASE_URL=postgres://infer:infer_dev_password@127.0.0.1:5432/infer?sslmode=disable \
+MODEL=qwen2.5:0.5b \
+bash scripts/e2e_go_runtime_real_ollama.sh
 ```
 
 ### Levantar DB y Redis
