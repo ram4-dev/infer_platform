@@ -95,3 +95,9 @@ docker-compose up --build
 - `docs/functional-spec.md`
 - `docs/technical-spec.md`
 - `docs/implementation-plan-bun.md`
+
+## Instructivos
+- `docs/instructions/README.md`
+- `docs/instructions/cli-internal-mvp.md`
+- `docs/instructions/e2e-local-testing-manual.md`
+- `docs/instructions/e2e-real-ollama-step-by-step.md`

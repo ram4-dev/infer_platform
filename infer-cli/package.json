@@ -1,0 +1,17 @@
+{
+  "name": "infer-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "infer": "./dist/src/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "start": "node dist/src/cli.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
